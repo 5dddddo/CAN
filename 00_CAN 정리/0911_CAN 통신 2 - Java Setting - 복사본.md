@@ -1,8 +1,10 @@
-# 0911_CAN 통신 3 - java
+# 0911_CAN 통신 3 - 데이터 송수신
 
 #### CANPro Analyzer 프로그램 역할을 java로 구현해보자
 
-> java Setting 관련 내용은 0911_CAN 통신 2 - Java Setting.md 참고
+> java Setting 관련 내용은 [0911_CAN 통신 2 - Java Setting.md](https://github.com/5dddddo/CAN/blob/master/00_CAN%20%EC%A0%95%EB%A6%AC/0911_CAN%20%ED%86%B5%EC%8B%A0%202%20-%20Java%20Setting.md) 참고
+>
+> 전체 소스코드 Ex01_DataFrameReceiver.java 참고
 
 <br>
 
@@ -30,7 +32,7 @@ private OutputStream out;
 
 <br>
 
-#### 1. 데이터 수신
+#### 1. 데이터 수신 여부 환경 읽기 및 설정
 
 ``` java
 String portName = "COM10";
@@ -78,7 +80,7 @@ private void connectPort(String portName) {
 
 <br>
 
-- Listener Class
+- Listener Class 정의
 
 ``` java
 // Listener 객체를 만들기 위한 class
@@ -100,33 +102,135 @@ class MyPortListener implements SerialPortEventListener {
 				...
 ```
 
+<br>
 
-
-
+- SerialPort 객체에 Listener 등록
 
 ``` java
-    
-                // 당연히 Listener 객체를 만들기 위한 class가 있어야 함
+                // Listener 객체 정의
                 serialPort.addEventListener(new MyPortListener());
                 // Port에서 데이터가 들어왔을 때 알림 기능 on
                 serialPort.notifyOnDataAvailable(true);
                 printMsg(portName + "에 리스너가 등록되었습니다.");
+
                 // 입출력을 하기 위해서 stream을 열어야 함
                 bis = new BufferedInputStream(serialPort.getInputStream());
                 out = serialPort.getOutputStream();
-            }
-        }
-    }
-}
 ```
 
+<br>
 
+-  ##### CAN 데이터 수신 여부 환경 읽기 및 설정 
+  
+  -  현재 CANPro의 CAN 데이터 수신 여부 환경을 읽어오거나 설정할 때 사용하는 명령으로써
+    
+    설정 시 CANPro 모듈의 내부에서는 CAN 수신 동작을 시작/중지하며
+    
+    이전에 수신한 CAN 수신 데이터를 지움
+  
+  - 동작 요청 명령
+    - 프로토콜을 이용해서 정해진 형식대로 문자열을 만들어서 out Stream을 통해서 출력
+  
+    | 시작 문자 | 명령 코드 |                    수신 여부<br>명령 코드                    | Check Sum | 끝 문자 |
+    | :-------: | :-------: | :----------------------------------------------------------: | :-------: | :-----: |
+    |     :     |     G     | 00 : 현재 수신여부 <br>환경 읽기<br>10 : 수신 중지<br>11 : 수신 시작 | Hex ASCII |   \r    |
+    |   1문자   |   1문자   |                            2문자                             |   2문자   |  1문자  |
+  
+  - Check Sum
+  
+    - 통신 프로토콜 Frame에서 시작 문자, 끝 문자를 제외한 나머지를 모두 더한 후
+  
+      0xff로 And 연산한 결과의 1바이트 값에 대응하는 **대문자** Hex ASCII 문자열
+  
+    - 예 ) 통신 프로토콜 Frame이 :G11A9\r 일 때, Check Sum 구하기
+  
+      ​	  'G' + '1' + '1' = 0x47 + 0x31 + 0x31 = A9
+  
+    ```java
+    // CAN 장비가 수신을 시작한다는 의미의 문자열
+    String msg = ":G11A9\r";
+    try {
+        byte[] inputData = msg.getBytes();
+        out.write(inputData);
+        printMsg(portName + "가 수신을 시작합니다.");
+    ```
 
+<br>
 
+#### 2. 데이터 송신 데이터 쓰기
 
-#### 2. 데이터 송신
+- CAN 네트워크상에 특정 CAN Message를 보내고자 할 때 사용하는 명령
+
+- 동작 요청 명령
+
+  | 시작 문자 | 명령 코드 | 송신 데이터<br>특성 코드 | CAN<br>송신 ID | CAN<br/>송신 데이터 | Check Sum | 끝 문자 |
+  | :-------: | :-------: | :----------------------: | :------------: | :-----------------: | :-------: | :-----: |
+  |     :     |     W     |        Hex ASCII         |   Hex ASCII    |      Hex ASCII      | Hex ASCII |   \r    |
+  |   1문자   |   1문자   |          2문자           |   4 or 8문자   |      0~16문자       |   2문자   |  1문자  |
+
+  - 송신 데이터 특성 코드 ( 16진수 2문자 : 76543210 순서)
+
+    - 송신 CAN Message Mode (5번째 비트)
+      - 0 : CAN2.0A
+      - 1 : CAN2.0B
+    - 송신 CAN Message Data 타입 (4번째 비트) 
+      - 0 : Data Frame
+      - 1 : Remote Frame
+    - 송신 CAN Message의 데이터 길이 (3~0번째 비트) : 0 ~ 8 사이의 값을 가짐
+      - 8 이면 Hex ASCII 문자 8개
+
+  - CAN 송신 ID
+
+    - 송신 데이터 특성 코드 중
+
+      CAN Message Mode가 0 ( CAN2.0A )이면 4문자
+
+      CAN Message Mode가 0 ( CAN2.0B )이면 8문자
+
+  - CAN 송신 데이터 
+
+    - 송신 데이터 특성 코드 중
+
+    ​	   송신 CAN Message의 데이터 길이에 따라 0 ~ 16문자를 보냄
+
+    <br>
+
+- CAN Message 
+
+  - :W280000000010000000000001234+CheckSum+\r
+
+    - 송신 데이터 특성 코드 : 0x28
+      - 2진수 0010 1000 : CAN 2.0B, Data Frame, 데이터 길이는 Hex ASCII 문자 8개
+
+    - CAN 송신 ID
+      - 000000001
+    - CAN 송신 데이터 
+      - 0000000000001234
+
+  - Check Sum 구하는 함수
+
+  ``` java
+  public String getCheckSum(){
+      String msg = "W28000000010000000000001234";
+  
+      int result = 0;
+      for (char c : msg.toCharArray()) {
+          result += (int) c;
+      }
+      result = result & 0xFF;
+      String chk = Integer.toHexString(result).toUpperCase();
+      return  ":" + msg + chk + "\r";
+  }
+  ```
+
+<br>
+
+- OutStream으로 데이터 송신하기
 
 ``` java
-
+String res = getCheckSum();
+byte[] inputData = res.getBytes();
+out.write(inputData);
+printMsg(portName + "에서 " + res + "를 전송합니다.");
 ```
 
